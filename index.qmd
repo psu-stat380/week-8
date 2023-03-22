@@ -1,0 +1,464 @@
+---
+title: "Week 8"
+title-block-banner: true
+title-block-style: default
+format: html
+# format: pdf
+---
+
+```{r}
+#| echo: false
+#| message: false
+#| output: false
+#| tags: []
+#| vscode: {languageId: r}
+dir <- "~/work/courses/stat380/weeks/week-8/"
+setwd(dir)
+```
+
+
+
+## Agenda:
+
+1. Logistic regression
+1. Logistic regression with torch
+1. Classification using Neural Netoworks
+
+#### Packages we will require this week
+
+```{r}
+#| echo: false
+#| message: false
+#| output: false
+#| tags: []
+#| vscode: {languageId: r}
+packages <- c(
+    # Old packages
+    "ISLR2",
+    "dplyr",
+    "tidyr",
+    "readr",
+    "purrr",
+    "glmnet",
+    "caret",
+    "repr",
+    # NEW
+    "torch",
+    "mlbench"
+)
+
+# renv::install(packages)
+sapply(packages, require, character.only=TRUE)
+```
+
+$$
+\boxed{y = \beta_0 + \beta_1 x_1 + \dots \beta_p x_p}
+$$
+
+looking at different loss functions:
+
+1. Least-squares: 
+$$
+L(\beta) = \sum_{i=1}^n \| y_i - \beta_0 - \beta_1 x_1 - \dots - \beta_p x_p\|^2
+$$
+
+2. Penalized least squares/LASSO:
+
+$$
+L(\beta) = \sum_{i=1}^n \| y_i - \beta_0 - \beta_1 x_1 - \dots - \beta_p x_p\|^2 + \lambda \|{\beta}\|_1
+$$
+
+# Classification
+
+We will be using the following dataset for the examples here
+
+> Breast cancer dataset: This dataset contains measurements of various characteristics of breast cancer cells, with the goal of predicting whether a tumor is benign or malignant.
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.data"
+col_names <- c("id", "diagnosis", paste0("feat", 1:30))
+df <- read_csv(
+    url, col_names, col_types = cols()
+    ) %>% 
+    select(-id) %>% 
+    mutate(outcome = ifelse(diagnosis == "M", 1, 0)) %>%
+    select(-diagnosis)
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+head(df)
+```
+
+The problem with linear regression for binary responses
+
+Let's start by looking at an example. Imagine we have a dataset with a binary response variable (0 or 1) and a continuous predictor variable. We might be tempted to use linear regression with the lm() function to model the relationship between the predictor and response variables. After all, linear regression is a powerful and flexible tool that can be used to model a wide range of relationships between variables.
+
+However, when we use linear regression with a binary response variable, we quickly run into a problem. The linear regression model will give us a predicted value for the response variable for any given value of the predictor variable, but this predicted value is not a probability. The predicted value can take on any value between 0 and 1, but it doesn't necessarily represent the probability of the response variable being a 1.
+
+To see why this is a problem, consider the following scenario. Suppose we have a dataset with a binary response variable and a continuous predictor variable. We fit a linear regression model to the data using the lm() function in R, and we get a predicted value of 0.8 for the response variable when the predictor variable has a value of 1.5. What does this predicted value of 0.8 actually mean?
+
+If we interpret the predicted value as a probability, we might conclude that the probability of the response variable being a 1 when the predictor variable has a value of 1.5 is 0.8. But this interpretation is incorrect. The predicted value from linear regression is not a probability, and it can take on values greater than 1 or less than 0.
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+reg_model <- lm(outcome ~ ., df)
+summary(reg_model)
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+n <- 100
+new_patients <- data.frame(matrix(rnorm(30 * n), nrow = n))
+colnames(new_patients) <- paste0("feat", 1:30)
+new_predictions <- predict(reg_model, newdata = new_patients, type = "response")
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+new_predictions %>% head()
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+boxplot(new_predictions)
+```
+
+$$
+\newcommand{\logodds}{\mathop{\log\text{-odds}}}
+$$
+
+$$
+\begin{aligned}
+\logodds(p(x)) = b_0 + b_1 x\\ \\ \\ \\
+p(x) = \frac{1}{1 + \exp(\beta_0 + \beta_1 x)}
+\end{aligned}
+$$
+
+## The need for logistic regression
+
+So, what do we do when we have a binary response variable and we want to model the relationship between the predictor and response variables? This is where logistic regression comes in. Logistic regression is a type of generalized linear model that is specifically designed for binary response variables.
+
+The main idea behind logistic regression is to transform the predicted values from linear regression so that they represent probabilities. We do this using a function called the logistic function, which maps any value between negative infinity and positive infinity to a value between 0 and 1. The logistic function is a sigmoidal curve that looks like an elongated S-shape. By applying the logistic function to the predicted values from linear regression, we can transform them into probabilities that represent the probability of the response variable being a 1.
+
+In the next section, we'll dive into the details of logistic regression and see how it works in practice using the breast cancer dataset.
+
+
+#### Odds and odds ratios
+
+Let's start by defining the odds of an event occurring. The odds of an event occurring are defined as the probability of the event occurring divided by the probability of the event not occurring. For example, if the probability of a basketball team winning a game is 0.6, then the odds of the team winning the game are 0.6/0.4 = 1.5.
+
+Odds ratios are a way to compare the odds of an event occurring between two different groups. The odds ratio is defined as the ratio of the odds of an event occurring in one group to the odds of the event occurring in another group. For example, if the odds of a basketball team winning a game are 1.5 in one group and 2.0 in another group, then the odds ratio of the first group to the second group is 1.5/2.0 = 0.75.
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+set.seed(123)
+binary_var <- rbinom(100, size = 1, prob = 0.6)
+group_var <- sample(1:2, size = 100, replace = TRUE)
+odds_group1 <- sum(binary_var[group_var == 1]) / sum(!binary_var[group_var == 1])
+odds_group2 <- sum(binary_var[group_var == 2]) / sum(!binary_var[group_var == 2])
+odds_ratio <- odds_group1 / odds_group2
+cat(paste("Odds group 1:", round(odds_group1, 2), "\n"))
+cat(paste("Odds group 2:", round(odds_group2, 2), "\n"))
+cat(paste("Odds ratio:", round(odds_ratio, 2), "\n"))
+```
+
+#### Logistic regression model
+
+Now let's move on to the logistic regression model. The logistic regression model is a type of generalized linear model that models the probability of an event occurring as a function of one or more predictor variables. The logistic regression model uses the logistic function, also known as the sigmoid function, to model the relationship between the predictor variables and the probability of the event occurring.
+
+**The sigmoid function is given as follows**
+
+$$
+\sigma(x) = \frac{1}{1 + e^{-x}}
+$$
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+sigmoid <- \(x)  1 / (1 + exp(-x))
+
+curve(sigmoid, -10, 10, ylab="sigmoid(x)")
+```
+
+In logistic regression, the underlying model is assumed to be of the form
+
+$$
+\boxed{p(x) = \sigma\Big(\beta_0 + \beta_1 x\Big) = \frac{1}{1 + \exp({-\beta_0 - \beta_1 x})}}
+$$
+
+where $p(x)$ where is the probability of the event occurring given the value of the predictor variable $x$, and $b0$ and $b1$ are the **intercept** and **slope** coefficients of the logistic regression model, respectively. 
+
+> $p(x)$ is gauranteed to be a probability for all values of $x$. 
+
+Notice how this is similar to **linear regression** which has 
+$$
+y(x) = \beta_0 + \beta_1 x
+$$
+
+The logistic function has an S-shaped curve and maps any real-valued input to a probability between 0 and 1. As such, the logistic regression model is well-suited for modeling binary response variables, where the goal is to predict the probability of an event occurring (e.g., whether a customer will buy a product or not).m
+
+## Logistic regression example
+
+The `glm()` function fits a generalized linear model, which includes logistic regression as a special case.
+
+```{r}
+set.seed(123)
+x <- rnorm(1000)
+y <- rbinom(1000, size = 1, prob = exp(0.5 + 0.8*x)/(1 + exp(0.5 + 0.8*x)))
+```
+
+```{r}
+y %>% head()
+```
+
+```{r}
+model <- glm(y ~ x, family = binomial())
+summary(model)
+```
+
+```{r}
+x_test <- -5.5
+sigmoid(coef(model)[1] + coef(model)[2] * x_test)
+```
+
+```{r}
+predict(model, newdata = data.frame(x=x_test), type="response")
+```
+
+```{r}
+new_x <- seq(-2, 2, by = 0.1)
+p1 <- predict(model, data.frame(x=new_x))
+p2 <- predict(model, data.frame(x=new_x), type="response")
+```
+
+```{r}
+#| tags: []
+boxplot(p1, p2)
+```
+
+#### Logistic regression for breast cancer
+
+
+Let's start by fitting a logistic regression model to the breast cancer dataset using the `glm()` function in R. 
+
+```{r}
+df <- df %>% mutate_at("outcome", factor)
+```
+
+```{r}
+model <- glm(outcome ~ ., data = df, family = binomial())
+summary(model)
+```
+
+---
+
+The output of the summary() function provides a summary of the model, including the coefficients of each predictor, their standard errors, and the corresponding p-values. The coefficients represent the log odds ratio of the response variable for each predictor. We can exponentiate the coefficients to get the odds ratios:m
+
+```{r}
+new_patient <- data.frame(matrix(rnorm(30), nrow = 1))
+names(new_patient) <- paste0("feat", 1:30)
+predict(model, newdata = new_patient, type = "response")
+```
+
+# Redo logistic regression, but this time using the `torch` library
+
+Now that we have the torch library installed, we can perform logistic regression using the following steps:
+
+1. Convert the data to a tensor
+1. Define the model architecture
+1. Define the loss function
+1. Define the optimizer
+1. Train the model
+1. Make predictions
+
+```{r}
+X <- cbind(x)
+x_tensor <- torch_tensor(X, dtype = torch_float())
+y_tensor <- torch_tensor(y, dtype = torch_float())
+```
+
+```{r}
+module <- nn_module(
+  initialize = function() {
+    self$fc1 <- nn_linear(1, 1)
+    self$fc2 <- nn_sigmoid()
+  },
+  forward = function(x) {
+    x %>% 
+      self$fc1() %>% 
+      self$fc2()
+  }
+)
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+logistic_reg <- module()
+```
+
+```{r}
+y_pred <- logistic_reg(x_tensor)
+head(y_pred)
+```
+
+
+> #### Question: What is an appropriate loss function?
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+L <- function(x, y, model){
+    y_pred <- model(x)
+    return (mean((y_pred - y)^2))
+}
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+logistic_reg_1 <- module()
+L(x_tensor, y_tensor, logistic_reg_1)
+```
+
+---
+
+##### Optimization
+
+```{r}
+#| tags: []
+logistic_reg_1$parameters
+```
+
+
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+optimizer <- optim_adam(logistic_reg_1$parameters, lr=0.01)
+
+epochs <- 200
+for (i in 1:epochs){
+    loss <- L(x_tensor, y_tensor, logistic_reg_1)
+    
+    optimizer$zero_grad()
+    loss$backward()
+    optimizer$step()
+    
+    if (i %% 20 == 0) {
+        cat(sprintf("Epoch: %d, Loss: %.4f\n", i, loss$item()))
+    }
+}
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+logistic_reg_1$parameters
+```
+
+---
+
+### Logistic loss function
+#### a.k.a. Binary cross entropy `nn_bce()`
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+nn_bce_loss()
+```
+
+```{r}
+#| tags: []
+#| vscode: {languageId: r}
+L2 <- function(x, y, model){
+    nn_bce_loss()(model(x), y)
+}
+
+logistic_reg_2 <- module()
+L2(x_tensor, y_tensor, logistic_reg_2)
+```
+
+---
+
+##### Optimization
+
+```{r}
+logistic_reg_2$parameters
+```
+
+```{r}
+#| vscode: {languageId: r}
+optimizer <- optim_adam(logistic_reg_2$parameters, lr=0.01)
+
+epochs <- 200
+for (i in 1:epochs){
+    loss <- L2(x_tensor, y_tensor, logistic_reg_2)
+    
+    optimizer$zero_grad()
+    loss$backward()
+    optimizer$step()
+    
+    if (i %% 20 == 0) {
+        cat(sprintf("Epoch: %d, Loss: %.4f\n", i, loss$item()))
+    }
+}
+```
+
+```{r}
+logistic_reg_2$parameters
+```
+
+### Comparisons
+
+The first model minimizes `L`
+```{r}
+c(
+    L(x_tensor, y_tensor, logistic_reg_1),
+    L(x_tensor, y_tensor, logistic_reg_2)
+)
+```
+
+
+The second model minimizes `L2`
+
+```{r}
+c(
+    L2(x_tensor, y_tensor, logistic_reg_1),
+    L2(x_tensor, y_tensor, logistic_reg_2)
+)
+```
+
+How do they both compare in terms of their accuracy?
+
+
+```{r}
+expected <- as_array(y_tensor)
+predictions_1 <- ifelse(logistic_reg_1(x_tensor) < 0.5, 0, 1)
+predictions_2 <- ifelse(logistic_reg_2(x_tensor) < 0.5, 0, 1)
+```
+
+
+This is the table of _expected values vs _actual predictions_   made by the **first model**
+```{r}
+table(expected, predictions_1)
+```
+
+This is the table of _expected values vs actual predictions_   made by the **second model**
+```{r}
+table(expected, predictions_2)
+```
+
+::: {.callout-note}
+## 
+We can see that using `nn_bce_loss()` does a **much better** job at predicting the expected values.
+:::
