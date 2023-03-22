@@ -7,6 +7,7 @@ project_packages <- c(
   "cowplot",
   "kableExtra"
 )
+
 base_packages <- c(
   "pacman",
   "rmarkdown",
